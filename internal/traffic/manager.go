@@ -74,6 +74,28 @@ func metricsConfig() (string, map[string]string) {
 	return configuredMetricsURL, configuredMetricsHeaders
 }
 
+var (
+	hubbleAddrMu sync.RWMutex
+	// configuredHubbleAddr is the --hubble-address flag value; package-level
+	// so it persists across context-switch resets.
+	configuredHubbleAddr string
+)
+
+// SetHubbleAddress sets a manual Hubble Relay gRPC address (host:port),
+// bypassing discovery and port-forwarding.
+func SetHubbleAddress(addr string) {
+	hubbleAddrMu.Lock()
+	defer hubbleAddrMu.Unlock()
+	configuredHubbleAddr = addr
+}
+
+// hubbleAddress returns the configured Hubble Relay address under the read lock.
+func hubbleAddress() string {
+	hubbleAddrMu.RLock()
+	defer hubbleAddrMu.RUnlock()
+	return configuredHubbleAddr
+}
+
 // Initialize sets up the traffic manager with the given K8s client
 func Initialize(client kubernetes.Interface) error {
 	return InitializeWithConfig(client, nil, "")
@@ -553,8 +575,19 @@ func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, err
 // stopped isn't reported as connected. It deliberately does NOT report another
 // owner's forward: traffic's data path always uses its own (Caretta/Hubble bring
 // one up), so a Prometheus forward for the same context means Prometheus is
-// connected, not traffic.
+// connected, not traffic. A live direct Hubble connection is reported by the
+// source itself — it never registers a forward.
 func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
+	// A direct Hubble connection never registers a forward — ask the source
+	// first, but only while Hubble is the active source
+	m.mu.RLock()
+	hubble, hubbleActive := m.activeSource.(*HubbleSource)
+	m.mu.RUnlock()
+	if hubbleActive {
+		if info := hubble.DirectConnectionInfo(); info != nil {
+			return info
+		}
+	}
 	return portforward.GetConnectionInfo(portforward.OwnerTraffic)
 }
 

@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -39,5 +40,23 @@ func TestConnectionTestOperationTimeoutUsesLongerExecAuthBudget(t *testing.T) {
 	want := execAuthConnectionProbeHTTPTimeout + connectionProbeTimeoutHeadroom
 	if got := connectionTestOperationTimeout(); got != want {
 		t.Fatalf("connectionTestOperationTimeout(exec auth) = %v, want %v", got, want)
+	}
+}
+
+// In-cluster, a switch to a different context must be rejected in preflight —
+// before any teardown. The pre-fix ordering tore down every subsystem and only
+// then hit SwitchContext's in-cluster guard, leaving the app dead until a pod
+// restart (reachable in production via POST /api/connection/retry and the
+// runtime-auth recovery worker).
+func TestPerformContextSwitchInClusterPreflight(t *testing.T) {
+	ForceInCluster = true
+	t.Cleanup(func() { ForceInCluster = false })
+
+	err := PerformContextSwitch("some-other-context")
+	if err == nil {
+		t.Fatal("expected error switching context in-cluster")
+	}
+	if !errors.Is(err, ErrContextSwitchPreflight) {
+		t.Fatalf("want ErrContextSwitchPreflight (nothing torn down), got: %v", err)
 	}
 }

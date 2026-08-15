@@ -400,6 +400,17 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return fmt.Errorf("%w: --namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", ErrContextSwitchPreflight, newContext)
 	}
 
+	// In-cluster, switching to a different context can never succeed, so reject
+	// it in preflight — SwitchContext's own guard fires only after the teardown
+	// below, which would leave every subsystem dead until a pod restart.
+	// Reconnecting to the same (sole) context is valid: the in-cluster client
+	// config is static, so skip the client rebuild and run the normal teardown +
+	// connectivity test + reinit.
+	inCluster := IsInCluster()
+	if inCluster && newContext != GetContextName() {
+		return fmt.Errorf("%w: cannot switch context when running in-cluster", ErrContextSwitchPreflight)
+	}
+
 	// Fire before-switch callbacks while the OLD context is still active, so
 	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
 	// cluster we're about to connect to. After the preflight above — a failed
@@ -422,16 +433,20 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 
 	// Step 2: Switch the K8s client to the new context
 	reportProgress("Connecting to cluster...")
-	t = time.Now()
-	log.Printf("Switching K8s client to context %q...", newContext)
-	if err := SwitchContext(newContext); err != nil {
-		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
-		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
-		errorlog.Record("context-switch", "error",
-			"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
-		return fmt.Errorf("failed to switch context: %w", err)
+	if inCluster {
+		log.Printf("Reusing in-cluster K8s client (same-context reconnect)...")
+	} else {
+		t = time.Now()
+		log.Printf("Switching K8s client to context %q...", newContext)
+		if err := SwitchContext(newContext); err != nil {
+			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
+			log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
+			errorlog.Record("context-switch", "error",
+				"stage=SwitchContext target=%q elapsed=%v: %v", newContext, elapsed, err)
+			return fmt.Errorf("failed to switch context: %w", err)
+		}
+		logTiming("   [ops] SwitchContext: %v", time.Since(t))
 	}
-	logTiming("   [ops] SwitchContext: %v", time.Since(t))
 	ClearNamespaceScopeOverride()
 	RestoreNamespaceScopePreference(GetContextName())
 	if err := requireNamespaceScopeTarget(newContext); err != nil {

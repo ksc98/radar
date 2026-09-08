@@ -543,6 +543,12 @@ traffic:
   #           name: prometheus-auth
   #           key: token
   prometheusHeadersFromEnv: {}
+  # Manual Hubble Relay gRPC address (host:port), dialed as-is with no
+  # port-forward fallback. Usually unnecessary: when unset, Radar discovers
+  # the relay and dials its Service address directly, port-forwarding only
+  # when that fails (NetworkPolicy blocking the pod network, off-cluster
+  # without routed Service DNS — needs rbac.portForward).
+  hubbleAddress: ""
 
 # Argo CD integration (GitOps deep diff)
 # Provisions the Argo CD API connection declaratively so it survives pod

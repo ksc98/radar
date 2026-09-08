@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -398,6 +399,21 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 		h.currentContext = contextName
 	}
 
+	// Manual --hubble-address: dialed as-is, no discovery and no port-forward
+	// fallback (--prometheus-url semantics).
+	if manual := hubbleAddress(); manual != "" {
+		log.Printf("[hubble] Dialing configured address %s (--hubble-address)", manual)
+		if err := h.connectGRPCLocked(ctx, manual); err != nil {
+			return &portforward.ConnectionInfo{
+				Connected:   false,
+				Namespace:   namespace,
+				ServiceName: hubbleRelayService,
+				Error:       fmt.Sprintf("Failed to connect to Hubble Relay at %s (--hubble-address): %v", manual, err),
+			}, nil
+		}
+		return h.commitDirectLocked(manual, namespace, contextName), nil
+	}
+
 	// Resolve ports from the Service if detection hasn't already. Fills both the
 	// service port (direct dial) and the container port (port-forward bypasses
 	// the Service) — they routinely differ (e.g. 80 -> 4245).
@@ -549,6 +565,19 @@ func (h *HubbleSource) directAddressLocked(namespace string) string {
 	return net.JoinHostPort(name, fmt.Sprintf("%d", h.servicePort))
 }
 
+// addrPort returns the numeric port of a host:port address, 0 if unparseable.
+func addrPort(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
 // tcpReachable reports whether addr accepts a TCP connection within timeout.
 func tcpReachable(addr string, timeout time.Duration) bool {
 	conn, err := net.DialTimeout("tcp", addr, timeout)
@@ -677,9 +706,10 @@ func (h *HubbleSource) stopOwnStaleForwardLocked(namespace string) {
 // against grpcAddr and commits the connection state on success. Caller must
 // hold h.mu.
 func (h *HubbleSource) connectGRPCLocked(ctx context.Context, grpcAddr string) error {
-	// Use service port as heuristic: port 443 suggests TLS, otherwise try plaintext first
-	// This avoids unnecessary latency from failed connection attempts
-	tryTLSFirst := h.servicePort == 443 && h.tlsConfig != nil
+	// Port 443 suggests TLS, otherwise try plaintext first to avoid the latency
+	// of a failed attempt. The dialed address's own port covers a manual
+	// --hubble-address, which never resolves the Service port.
+	tryTLSFirst := (h.servicePort == 443 || addrPort(grpcAddr) == 443) && h.tlsConfig != nil
 
 	var conn *grpc.ClientConn
 	var lastErr error

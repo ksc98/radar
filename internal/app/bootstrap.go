@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -77,6 +78,7 @@ type AppConfig struct {
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
 	BeylaJobSelector          string
+	HubbleAddress             string // manual Hubble Relay gRPC address (host:port); "" = discover + direct-dial/port-forward
 	Version                   string
 	MCPEnabled                bool
 	AIHistory                 bool   // persist AI investigations across restarts
@@ -306,6 +308,12 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
+	}
+	if cfg.HubbleAddress != "" {
+		if _, _, err := net.SplitHostPort(cfg.HubbleAddress); err != nil {
+			log.Fatalf("Invalid --hubble-address %q: must be host:port (e.g., hubble-relay.kube-system.svc:80): %v", cfg.HubbleAddress, err)
+		}
+		traffic.SetHubbleAddress(cfg.HubbleAddress)
 	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {

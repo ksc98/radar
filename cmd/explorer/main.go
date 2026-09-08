@@ -128,6 +128,7 @@ func main() {
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	hubbleAddress := flag.String("hubble-address", fileCfg.HubbleAddress, "Manual Hubble Relay gRPC address (host:port, e.g. hubble-relay.kube-system.svc:80; skips discovery and port-forwarding)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
 	// than merging — matches kubectl semantics (file is the default, CLI wins).
@@ -370,6 +371,7 @@ func main() {
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,
+		HubbleAddress:            *hubbleAddress,
 		MCPEnabled:               mcpEnabled,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,

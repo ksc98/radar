@@ -114,6 +114,78 @@ func TestConnectDirectPlaintext(t *testing.T) {
 	}
 }
 
+// A manual --hubble-address is dialed as-is: no Service lookup (the fake
+// clientset holds no hubble-relay Service), no port-forward, and the source
+// reports the direct connection itself.
+func TestConnectManualHubbleAddress(t *testing.T) {
+	port := startStubRelay(t, nil)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	SetHubbleAddress(addr)
+	t.Cleanup(func() { SetHubbleAddress("") })
+
+	h := NewHubbleSource(fake.NewSimpleClientset())
+	info, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !info.Connected {
+		t.Fatalf("expected connected, got error: %s", info.Error)
+	}
+	if info.Address != addr {
+		t.Errorf("Address = %q, want %q", info.Address, addr)
+	}
+	if info.LocalPort != 0 {
+		t.Errorf("LocalPort = %d, want 0 for a direct connection", info.LocalPort)
+	}
+	if pf := portforward.GetConnectionInfo(portforward.OwnerTraffic); pf.Connected {
+		t.Error("manual address must not involve the port-forward registry")
+	}
+	if h.servicePort != 0 || h.relayPort != 0 {
+		t.Errorf("manual address must skip Service discovery, got servicePort=%d relayPort=%d", h.servicePort, h.relayPort)
+	}
+
+	ci := h.ConnectionInfo()
+	if !ci.Connected || ci.Address != addr {
+		t.Fatalf("ConnectionInfo = {connected:%v addr:%q}, want {true %q}", ci.Connected, ci.Address, addr)
+	}
+
+	// Reconnecting while healthy reuses the live connection.
+	info2, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil || !info2.Connected || info2.Address != addr {
+		t.Fatalf("reconnect: info=%+v err=%v", info2, err)
+	}
+
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if h.ConnectionInfo().Connected {
+		t.Error("ConnectionInfo should report disconnected after Close")
+	}
+}
+
+// An unreachable manual address fails loudly instead of falling back to
+// discovery or port-forwarding.
+func TestConnectManualHubbleAddressUnreachable(t *testing.T) {
+	addr := fmt.Sprintf("127.0.0.1:%d", reserveClosedPort(t))
+	SetHubbleAddress(addr)
+	t.Cleanup(func() { SetHubbleAddress("") })
+
+	h := NewHubbleSource(fake.NewSimpleClientset())
+	info, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if info.Connected {
+		t.Fatal("expected connection failure for unreachable manual address")
+	}
+	if !strings.Contains(info.Error, "--hubble-address") {
+		t.Errorf("Error = %q, want it to name --hubble-address", info.Error)
+	}
+	if pf := portforward.GetConnectionInfo(portforward.OwnerTraffic); pf.Connected {
+		t.Error("manual address must never fall back to a port-forward")
+	}
+}
+
 func TestConnectDirectTLSWithSANDiscovery(t *testing.T) {
 	cert, pool := selfSignedCert(t, "relay.test.example")
 	port := startStubRelay(t, credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{cert}}))
